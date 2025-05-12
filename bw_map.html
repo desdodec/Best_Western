@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Best Western UK Hotels and POIs Map</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    body, html { margin:0; padding:0; height:100%; }
+    #map { width:100%; height:100%; }
+    .legend-line { background:#000; height:2px; }
+    .legend-text { text-align:center; font-size:12px; margin-top:2px; }
+    .legend { background: white; padding:6px; line-height:1.2; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <!-- Config: load your API key from config.js -->
+  <script src="config.js"></script>
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <!-- PapaParse for CSV parsing -->
+  <script src="https://unpkg.com/papaparse@5.3.2/papaparse.min.js"></script>
+
+  <script>
+    // Initialize map centred over UK
+    const map = L.map('map').setView([55.3781, -3.4360], 6);
+
+    // Scale control (metric)
+    L.control.scale({ position: 'bottomleft', metric: true, imperial: false }).addTo(map);
+
+    // Custom 10km legend control
+    const tenKmLegend = L.control({ position: 'bottomleft' });
+    tenKmLegend.onAdd = function(map) {
+      const div = L.DomUtil.create('div', 'legend');
+      div.innerHTML = '<div id="legend-line" class="legend-line"></div>' +
+                      '<div class="legend-text">10 km</div>';
+      L.DomEvent.disableClickPropagation(div);
+      return div;
+    };
+    tenKmLegend.addTo(map);
+
+    // Function to update legend-line width based on zoom
+    function updateLegend() {
+      // meters per pixel at map center
+      const center = map.getCenter();
+      const p1 = map.latLngToContainerPoint(center);
+      const p2 = L.point(p1.x + 1, p1.y);
+      const latLng2 = map.containerPointToLatLng(p2);
+      const metersPerPixel = map.distance(center, latLng2);
+      const pixelLength = 10000 / metersPerPixel;
+      const line = document.getElementById('legend-line');
+      if (line) line.style.width = pixelLength + 'px';
+    }
+    map.on('zoomend move', updateLegend);
+    updateLegend();
+
+    // Base OSM layer
+    const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    // Cycle network overlay via Thunderforest
+    const cycleLayer = L.tileLayer(
+      `https://{s}.tile.thunderforest.com/cycle/{z}/{x}/{y}.png?apikey=${window.THUNDERFOREST_API_KEY}`,
+      { subdomains:['a','b','c'], maxZoom:19, attribution:'&copy; OpenCycleMap, &copy; OSM contributors', crossOrigin:'anonymous' }
+    ).addTo(map);
+
+    // Feature groups
+    const hotelsLayer     = L.featureGroup();
+    const theatresLayer   = L.featureGroup();
+    const cathedralsLayer = L.featureGroup();
+
+    // Layer control
+    const overlays = {
+      'Cycle Routes': cycleLayer,
+      'Hotels': hotelsLayer,
+      'Theatres': theatresLayer,
+      'Cathedrals': cathedralsLayer
+    };
+    L.control.layers({ 'OpenStreetMap': osmLayer }, overlays, { collapsed: false }).addTo(map);
+
+    // Helper to fetch and add Overpass POIs
+    function addOverpassLayer(query, layer, label, color) {
+      fetch('https://overpass-api.de/api/interpreter', { method:'POST', body:query })
+        .then(res=>res.json())
+        .then(data=>{
+          data.elements.forEach(el=>{
+            let lat, lon;
+            if(el.type==='node'){ lat=el.lat; lon=el.lon; }
+            else if(el.center){ lat=el.center.lat; lon=el.center.lon; }
+            if(lat&&lon){
+              const marker = L.circleMarker([lat, lon],{ radius:6, fillColor:color, color:'#fff', weight:1, fillOpacity:0.8 });
+              const name=el.tags.name||label;
+              marker.bindPopup(`<strong>${name}</strong><br>${label}`);
+              layer.addLayer(marker);
+            }
+          });
+          layer.addTo(map);
+        }).catch(err=>console.error('Overpass error:',err));
+    }
+
+    // UK bbox
+    const ukBbox='49.9,-8.2,60.9,2.1';
+    const theatreQuery=`[out:json][timeout:25];(node[amenity=theatre](${ukBbox});way[amenity=theatre](${ukBbox});relation[amenity=theatre](${ukBbox}););out center;`;
+    const cathedralQuery=`[out:json][timeout:25];(node[building=cathedral](${ukBbox});way[building=cathedral](${ukBbox});relation[building=cathedral](${ukBbox}););out center;`;
+
+    // Load hotels
+    Papa.parse('hotels_with_coords.csv',{ download:true, header:true, skipEmptyLines:true,
+      complete:({data})=>{
+        data.forEach(h=>{
+          const lat=parseFloat(h.Latitude), lon=parseFloat(h.Longitude);
+          if(!isNaN(lat)&&!isNaN(lon)){
+            const m=L.marker([lat,lon]);
+            m.bindPopup(`<strong>${h.Name}</strong><br>${h.Street}<br>${h.City}, ${h.Postcode}`);
+            hotelsLayer.addLayer(m);
+          }
+        });
+        hotelsLayer.addTo(map);
+      }
+    });
+
+    // Add POIs
+    addOverpassLayer(theatreQuery,theatresLayer,'Theatre','#e63946');
+    addOverpassLayer(cathedralQuery,cathedralsLayer,'Cathedral','#457b9d');
+  </script>
+</body>
+</html>

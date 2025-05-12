@@ -9,9 +9,9 @@
   <style>
     body, html { margin:0; padding:0; height:100%; }
     #map { width:100%; height:100%; }
-    .legend-line { background:#000; height:2px; }
-    .legend-text { text-align:center; font-size:12px; margin-top:2px; }
-    .legend { background: white; padding:6px; line-height:1.2; }
+    .legend { background: white; padding:6px; line-height:1.2; font-family: sans-serif; }
+    .legend-line { background:#000; height:2px; margin:0 auto; }
+    .legend-text { text-align:center; font-size:12px; margin-top:4px; }
   </style>
 </head>
 <body>
@@ -19,113 +19,125 @@
 
   <!-- Config: load your API key from config.js -->
   <script src="config.js"></script>
-  <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-  <!-- PapaParse for CSV parsing -->
   <script src="https://unpkg.com/papaparse@5.3.2/papaparse.min.js"></script>
 
   <script>
     // Initialize map centred over UK
     const map = L.map('map').setView([55.3781, -3.4360], 6);
-
-    // Scale control (metric)
     L.control.scale({ position: 'bottomleft', metric: true, imperial: false }).addTo(map);
 
-    // Custom 10km legend control
+    // 10 km legend
     const tenKmLegend = L.control({ position: 'bottomleft' });
-    tenKmLegend.onAdd = function(map) {
+    tenKmLegend.onAdd = () => {
       const div = L.DomUtil.create('div', 'legend');
-      div.innerHTML = '<div id="legend-line" class="legend-line"></div>' +
-                      '<div class="legend-text">10 km</div>';
+      div.innerHTML = '<div id="legend-line" class="legend-line"></div><div class="legend-text">10 km</div>';
       L.DomEvent.disableClickPropagation(div);
       return div;
     };
     tenKmLegend.addTo(map);
-
-    // Function to update legend-line width based on zoom
     function updateLegend() {
-      // meters per pixel at map center
       const center = map.getCenter();
       const p1 = map.latLngToContainerPoint(center);
       const p2 = L.point(p1.x + 1, p1.y);
       const latLng2 = map.containerPointToLatLng(p2);
       const metersPerPixel = map.distance(center, latLng2);
       const pixelLength = 10000 / metersPerPixel;
-      const line = document.getElementById('legend-line');
-      if (line) line.style.width = pixelLength + 'px';
+      document.getElementById('legend-line').style.width = pixelLength + 'px';
     }
     map.on('zoomend move', updateLegend);
     updateLegend();
 
-    // Base OSM layer
-    const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '&copy; OpenStreetMap contributors'
+    // Base layer
+    const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom:19, attribution:'&copy; OpenStreetMap contributors'
     }).addTo(map);
 
-    // Cycle network overlay via Thunderforest
-    const cycleLayer = L.tileLayer(
+    // Cycle layer
+    const cycle = L.tileLayer(
       `https://{s}.tile.thunderforest.com/cycle/{z}/{x}/{y}.png?apikey=${window.THUNDERFOREST_API_KEY}`,
-      { subdomains:['a','b','c'], maxZoom:19, attribution:'&copy; OpenCycleMap, &copy; OSM contributors', crossOrigin:'anonymous' }
-    ).addTo(map);
+      { subdomains:['a','b','c'], maxZoom:19, attribution:'&copy; OpenCycleMap', crossOrigin:'anonymous' }
+    );
+
+    // Railways tile layer (OpenRailwayMap)
+    const railLayer = L.tileLayer(
+      'https://{s}.tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png',
+      { maxZoom:19, subdomains:['a','b','c'], attribution:'&copy; OpenRailwayMap, &copy; OSM contributors' }
+    );
 
     // Feature groups
-    const hotelsLayer     = L.featureGroup();
-    const theatresLayer   = L.featureGroup();
-    const cathedralsLayer = L.featureGroup();
+    const hotels = L.featureGroup().addTo(map);
+    const theatres = L.featureGroup();
+    const cathedrals = L.featureGroup();
 
     // Layer control
     const overlays = {
-      'Cycle Routes': cycleLayer,
-      'Hotels': hotelsLayer,
-      'Theatres': theatresLayer,
-      'Cathedrals': cathedralsLayer
+      'Cycle Routes': cycle,
+      'Railways': railLayer,
+      'Hotels': hotels,
+      'Theatres': theatres,
+      'Cathedrals': cathedrals
     };
-    L.control.layers({ 'OpenStreetMap': osmLayer }, overlays, { collapsed: false }).addTo(map);
+    L.control.layers({ 'OSM': osm }, overlays, { collapsed: false }).addTo(map);
 
-    // Helper to fetch and add Overpass POIs
-    function addOverpassLayer(query, layer, label, color) {
+    // Helper to load Overpass layers
+    function loadOverpassLayer(query, layer, style, label) {
+      layer.clearLayers();
       fetch('https://overpass-api.de/api/interpreter', { method:'POST', body:query })
-        .then(res=>res.json())
-        .then(data=>{
-          data.elements.forEach(el=>{
-            let lat, lon;
-            if(el.type==='node'){ lat=el.lat; lon=el.lon; }
-            else if(el.center){ lat=el.center.lat; lon=el.center.lon; }
-            if(lat&&lon){
-              const marker = L.circleMarker([lat, lon],{ radius:6, fillColor:color, color:'#fff', weight:1, fillOpacity:0.8 });
-              const name=el.tags.name||label;
-              marker.bindPopup(`<strong>${name}</strong><br>${label}`);
-              layer.addLayer(marker);
-            }
+        .then(res => res.json())
+        .then(data => {
+          console.log(`Loaded ${data.elements.length} ${label}`);
+          data.elements.forEach(el => {
+            let coords;
+            if (el.type === 'node') coords = [[el.lat, el.lon]];
+            else if (el.geometry) coords = el.geometry.map(p => [p.lat, p.lon]);
+            else if (el.center) coords = [[el.center.lat, el.center.lon]];
+            if (!coords) return;
+            const obj = coords.length > 1
+              ? L.polyline(coords, style)
+              : L.circleMarker(coords[0], style);
+            const name = (el.tags && el.tags.name) || label;
+            obj.bindPopup(`<strong>${name}</strong><br>${label}`);
+            layer.addLayer(obj);
           });
           layer.addTo(map);
-        }).catch(err=>console.error('Overpass error:',err));
+        })
+        .catch(err => console.error(`${label} Overpass error:`, err));
     }
 
-    // UK bbox
-    const ukBbox='49.9,-8.2,60.9,2.1';
-    const theatreQuery=`[out:json][timeout:25];(node[amenity=theatre](${ukBbox});way[amenity=theatre](${ukBbox});relation[amenity=theatre](${ukBbox}););out center;`;
-    const cathedralQuery=`[out:json][timeout:25];(node[building=cathedral](${ukBbox});way[building=cathedral](${ukBbox});relation[building=cathedral](${ukBbox}););out center;`;
+    const ukBbox = '49.9,-8.2,60.9,2.1';
 
-    // Load hotels
-    Papa.parse('hotels_with_coords.csv',{ download:true, header:true, skipEmptyLines:true,
-      complete:({data})=>{
-        data.forEach(h=>{
-          const lat=parseFloat(h.Latitude), lon=parseFloat(h.Longitude);
-          if(!isNaN(lat)&&!isNaN(lon)){
-            const m=L.marker([lat,lon]);
+    // Load Theatres
+    loadOverpassLayer(
+      `[out:json][timeout:25];(node[amenity=theatre](${ukBbox});way[amenity=theatre](${ukBbox});relation[amenity=theatre](${ukBbox}););out center;`,
+      theatres,
+      { radius:6, fillColor:'#e63946', color:'#fff', weight:1, fillOpacity:0.8 },
+      'Theatre'
+    );
+
+    // Load Cathedrals
+    loadOverpassLayer(
+      `[out:json][timeout:25];(node[building=cathedral](${ukBbox});way[building=cathedral](${ukBbox});relation[building=cathedral](${ukBbox}););out center;`,
+      cathedrals,
+      { radius:6, fillColor:'#457b9d', color:'#fff', weight:1, fillOpacity:0.8 },
+      'Cathedral'
+    );
+
+    // Load Hotels from CSV
+    Papa.parse('hotels_with_coords.csv', {
+      download: true, header: true, skipEmptyLines: true,
+      complete: ({ data }) => {
+        data.forEach(h => {
+          const lat = parseFloat(h.Latitude);
+          const lon = parseFloat(h.Longitude);
+          if (!isNaN(lat) && !isNaN(lon)) {
+            const m = L.marker([lat, lon]);
             m.bindPopup(`<strong>${h.Name}</strong><br>${h.Street}<br>${h.City}, ${h.Postcode}`);
-            hotelsLayer.addLayer(m);
+            hotels.addLayer(m);
           }
         });
-        hotelsLayer.addTo(map);
       }
     });
-
-    // Add POIs
-    addOverpassLayer(theatreQuery,theatresLayer,'Theatre','#e63946');
-    addOverpassLayer(cathedralQuery,cathedralsLayer,'Cathedral','#457b9d');
   </script>
 </body>
 </html>

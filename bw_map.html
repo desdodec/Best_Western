@@ -124,20 +124,28 @@
     );
 
     // Load Hotels from CSV
-    Papa.parse('hotels_with_coords.csv', {
-      download: true, header: true, skipEmptyLines: true,
-      complete: ({ data }) => {
-        data.forEach(h => {
-          const lat = parseFloat(h.Latitude);
-          const lon = parseFloat(h.Longitude);
-          if (!isNaN(lat) && !isNaN(lon)) {
-            const m = L.marker([lat, lon]);
-            m.bindPopup(`<strong>${h.Name}</strong><br>${h.Street}<br>${h.City}, ${h.Postcode}`);
-            hotels.addLayer(m);
-          }
-        });
+Papa.parse('hotels_with_coords.csv', {
+  download: true,
+  header: true,
+  skipEmptyLines: true,
+  complete: ({ data }) => {
+    // log how many rows we got from the CSV:
+    console.log(`CSV contains ${data.length} hotel records`);
+
+    data.forEach(h => {
+      const lat = parseFloat(h.Latitude);
+      const lon = parseFloat(h.Longitude);
+      if (!isNaN(lat) && !isNaN(lon)) {
+        const m = L.marker([lat, lon]);
+        m.bindPopup(`<strong>${h.Name}</strong><br>${h.Street}<br>${h.City}, ${h.Postcode}`);
+        hotels.addLayer(m);
       }
     });
+
+    // log how many markers actually made it onto the map:
+    console.log(`Displayed ${hotels.getLayers().length} hotel markers`);
+  }
+});
   </script>
 </body>
 </html>
